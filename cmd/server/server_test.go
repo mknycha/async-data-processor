@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"net/http"
@@ -6,13 +6,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	"github.com/mknycha/async-data-processor/cmd/server/mocks"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestMessageRoute(t *testing.T) {
 	t.Run("valid request", func(t *testing.T) {
 		cfg := Config{}
-		router, err := setupRouter(cfg)
+		ctrl := gomock.NewController(t)
+		mockWrapper := mocks.NewMockwrapper(ctrl)
+		mockWrapper.EXPECT().PublishWithContext(gomock.Any(), []byte(`{"timestamp":"2019-10-12T07:20:50.52Z","value":"B"}`))
+		router, err := setupRouter(cfg, mockWrapper)
 		if err != nil {
 			t.Fatalf("failed to setup router: %s", err.Error())
 		}
@@ -34,7 +39,9 @@ func TestMessageRoute(t *testing.T) {
 
 	t.Run("invalid request", func(t *testing.T) {
 		cfg := Config{}
-		router, err := setupRouter(cfg)
+		ctrl := gomock.NewController(t)
+		mockWrapper := mocks.NewMockwrapper(ctrl)
+		router, err := setupRouter(cfg, mockWrapper)
 		if err != nil {
 			t.Fatalf("failed to setup router: %s", err.Error())
 		}
