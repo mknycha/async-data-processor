@@ -16,6 +16,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const timeout = time.Second * 5
+
 //go:generate mockgen -destination mocks/generated.go --package mocks --source server.go
 type wrapper interface {
 	PublishWithContext(ctx context.Context, messageBody []byte) error
@@ -61,6 +63,11 @@ func ServerCommand() *cobra.Command {
 	}
 }
 
+type Entry struct {
+	Timestamp time.Time `json:"timestamp" binding:"required" time_format:"2006-01-02T15:04:05Z07:00"`
+	Value     string    `json:"value"`
+}
+
 func setupRouter(cfg Config, wrapper wrapper) (*gin.Engine, error) {
 	r := gin.Default()
 	// TODO: Set mode to 'release' before deployment
@@ -70,36 +77,39 @@ func setupRouter(cfg Config, wrapper wrapper) (*gin.Engine, error) {
 	}
 	r.POST("/message", func(c *gin.Context) {
 		// TODO: EOF error is returned from the API when no body is given
-		// TODO: It should accept a slice on entries
-		var req struct {
-			Timestamp time.Time `json:"timestamp" binding:"required" time_format:"2006-01-02T15:04:05Z07:00"`
-			Value     string    `json:"value"`
-		}
+		var req []Entry
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		jsonContent, err := json.Marshal(req)
-		if err != nil {
-			err = errors.Wrap(err, "failed to marshal json")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		for _, ent := range req {
+			// TODO: Can it happen in parallel?
+			err = sendEntryForProcessing(wrapper, ent)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 		}
-		err = wrapper.PublishWithContext(ctx, jsonContent)
-		if err != nil {
-			err = errors.Wrap(err, "failed to publish message")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		log.Printf("Published message: %s\n", string(jsonContent))
 		c.JSON(http.StatusCreated, req)
 	})
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, "{'status':'OK'}")
 	})
 	return r, nil
+}
+
+func sendEntryForProcessing(wrapper wrapper, ent Entry) error {
+	jsonContent, err := json.Marshal(ent)
+	if err != nil {
+		return errors.Wrap(err, "failed to marshal json")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	err = wrapper.PublishWithContext(ctx, jsonContent)
+	if err != nil {
+		return errors.Wrap(err, "failed to publish message")
+	}
+	log.Printf("Published message: %s\n", string(jsonContent))
+	return nil
 }
