@@ -85,7 +85,6 @@ func setupRouter(cfg Config, wrapper wrapper) (*gin.Engine, error) {
 		return nil, err
 	}
 	r.POST("/message", func(c *gin.Context) {
-		// TODO: EOF error is returned from the API when no body is given
 		var req []Entry
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -93,7 +92,7 @@ func setupRouter(cfg Config, wrapper wrapper) (*gin.Engine, error) {
 		}
 
 		for _, ent := range req {
-			// TODO: Can it happen in parallel?
+			// TODO: Optimize this, entries can be sent for processing in paralel
 			err = sendEntryForProcessing(wrapper, ent, cfg.ShardsCount)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

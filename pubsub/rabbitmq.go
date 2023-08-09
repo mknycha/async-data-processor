@@ -15,6 +15,17 @@ type pubsubWrapper struct {
 	ch   *amqp.Channel
 }
 
+func NewWrapper(conn *amqp.Connection) (*pubsubWrapper, error) {
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to open a channel")
+	}
+	return &pubsubWrapper{
+		conn: conn,
+		ch:   ch,
+	}, nil
+}
+
 func (w *pubsubWrapper) PublishWithContext(ctx context.Context, messageBody []byte, shardNo int) error {
 	err := w.ch.PublishWithContext(ctx,
 		"",
@@ -34,22 +45,22 @@ func (w *pubsubWrapper) PublishWithContext(ctx context.Context, messageBody []by
 
 func (w *pubsubWrapper) MessagesChannel(shardNo int) (<-chan amqp.Delivery, error) {
 	err := w.ch.Qos(
-		1,     // prefetch count
-		0,     // prefetch size
-		false, // global
+		1,
+		0,
+		false,
 	)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to set QoS")
 	}
 
 	msgs, err := w.ch.Consume(
-		queueName(shardNo), // queue
-		"",                 // consumer
-		false,              // auto-ack
-		false,              // exclusive
-		false,              // no-local
-		false,              // no-wait
-		nil,                // args
+		queueName(shardNo),
+		"",
+		false,
+		false,
+		false,
+		false,
+		nil,
 	)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to register a consumer")
@@ -72,17 +83,6 @@ func (w *pubsubWrapper) QueueDeclare(shardNo int) error {
 		return errors.Wrap(err, "failed to declare a queue")
 	}
 	return err
-}
-
-func NewWrapper(conn *amqp.Connection) (*pubsubWrapper, error) {
-	ch, err := conn.Channel()
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to open a channel")
-	}
-	return &pubsubWrapper{
-		conn: conn,
-		ch:   ch,
-	}, nil
 }
 
 func queueName(shardNo int) string {
