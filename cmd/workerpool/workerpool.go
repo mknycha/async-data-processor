@@ -13,10 +13,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const batchSizeToFlush = 5
+
 type Config struct {
 	RabbitmqUrl            string `envconfig:"RABBITMQ_URL" default:"amqp://guest:guest@localhost:5672/"`
 	ShardsCount            int    `envconfig:"SHARDS_COUNT" default:"5"`
-	WorkersCount           int    `envconfig:"WORKERS_COUNT" default:"1"`
+	WorkersCount           int    `envconfig:"WORKERS_COUNT" default:"3"`
 	WorkersWorktimeSeconds int    `envconfig:"WORKERS_WORKTIME_SECONDS" default:"120"`
 }
 
@@ -51,13 +53,14 @@ func WorkerPoolCommand() *cobra.Command {
 				if err != nil {
 					log.Fatalf("failed to get messages channel: %s", err.Error())
 				}
+				b := &messagesBatch{}
 				for j := 0; j < cfg.WorkersCount; j++ {
-					wg.Add(1)
 					workerId := fmt.Sprintf("%d-%d", i, j)
 					log.Printf("spawning worker #%s\n", workerId)
 					ctx, cancelFunc := context.WithTimeout(context.Background(), time.Duration(cfg.WorkersWorktimeSeconds)*time.Second)
 					defer cancelFunc()
-					go spawnWorker(ctx, msgs, &wg, workerId)
+					wg.Add(1)
+					go spawnWorker(ctx, b, msgs, &wg, workerId)
 				}
 			}
 
@@ -73,17 +76,30 @@ func WorkerPoolCommand() *cobra.Command {
 	}
 }
 
-func spawnWorker(ctx context.Context, msgs <-chan amqp.Delivery, wg *sync.WaitGroup, workerId string) {
+func spawnWorker(ctx context.Context, b *messagesBatch, msgs <-chan amqp.Delivery, wg *sync.WaitGroup, workerId string) {
 	for {
 		select {
 		case <-ctx.Done():
+			// flush the remaining messages before stopping
+			flush(b, workerId)
 			log.Printf("stopping worker #%s...\n", workerId)
 			wg.Done()
 			return
 		// TODO: What if the msgs channel is closed?
 		case msg := <-msgs:
-			log.Printf("Worker #%s received a message: %s", workerId, string(msg.Body))
+			b.Push(msg.Body)
 			msg.Ack(false)
+			if b.Size() == batchSizeToFlush {
+				flush(b, workerId)
+			}
 		}
+	}
+}
+
+func flush(b *messagesBatch, workerId string) {
+	batchedMessages := b.GetMessages()
+	b.Reset()
+	for _, msgBody := range batchedMessages {
+		log.Printf("Worker #%s received a message: %s", workerId, string(msgBody))
 	}
 }
