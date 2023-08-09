@@ -2,22 +2,23 @@ package pubsub
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/pkg/errors"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-const queueName = "task_queue"
+const baseQueueName = "task_queue"
 
 type pubsubWrapper struct {
 	conn *amqp.Connection
 	ch   *amqp.Channel
 }
 
-func (w *pubsubWrapper) PublishWithContext(ctx context.Context, messageBody []byte) error {
+func (w *pubsubWrapper) PublishWithContext(ctx context.Context, messageBody []byte, shardNo int) error {
 	err := w.ch.PublishWithContext(ctx,
 		"",
-		queueName,
+		queueName(shardNo),
 		false,
 		false,
 		amqp.Publishing{
@@ -31,7 +32,7 @@ func (w *pubsubWrapper) PublishWithContext(ctx context.Context, messageBody []by
 	return nil
 }
 
-func (w *pubsubWrapper) MessagesChannel() (<-chan amqp.Delivery, error) {
+func (w *pubsubWrapper) MessagesChannel(shardNo int) (<-chan amqp.Delivery, error) {
 	err := w.ch.Qos(
 		1,     // prefetch count
 		0,     // prefetch size
@@ -42,13 +43,13 @@ func (w *pubsubWrapper) MessagesChannel() (<-chan amqp.Delivery, error) {
 	}
 
 	msgs, err := w.ch.Consume(
-		queueName, // queue
-		"",        // consumer
-		false,     // auto-ack
-		false,     // exclusive
-		false,     // no-local
-		false,     // no-wait
-		nil,       // args
+		queueName(shardNo), // queue
+		"",                 // consumer
+		false,              // auto-ack
+		false,              // exclusive
+		false,              // no-local
+		false,              // no-wait
+		nil,                // args
 	)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to register a consumer")
@@ -57,15 +58,9 @@ func (w *pubsubWrapper) MessagesChannel() (<-chan amqp.Delivery, error) {
 	return msgs, nil
 }
 
-func NewWrapper(conn *amqp.Connection) (*pubsubWrapper, error) {
-	ch, err := conn.Channel()
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to open a channel")
-	}
-
-	_, err = ch.QueueDeclare(
-		// TODO: We need to have several queues, each for one worker pool
-		queueName,
+func (w *pubsubWrapper) QueueDeclare(shardNo int) error {
+	_, err := w.ch.QueueDeclare(
+		queueName(shardNo),
 		// durable is set to true, so that messages are not lost if connection to channel is lost
 		true,
 		false,
@@ -74,11 +69,22 @@ func NewWrapper(conn *amqp.Connection) (*pubsubWrapper, error) {
 		nil,
 	)
 	if err != nil {
-		ch.Close()
-		return nil, errors.Wrap(err, "failed to declare a queue")
+		return errors.Wrap(err, "failed to declare a queue")
+	}
+	return err
+}
+
+func NewWrapper(conn *amqp.Connection) (*pubsubWrapper, error) {
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to open a channel")
 	}
 	return &pubsubWrapper{
 		conn: conn,
 		ch:   ch,
 	}, nil
+}
+
+func queueName(shardNo int) string {
+	return fmt.Sprintf("%s_%d", baseQueueName, shardNo)
 }

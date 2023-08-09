@@ -35,15 +35,15 @@ func (m *Mockwrapper) EXPECT() *MockwrapperMockRecorder {
 }
 
 // PublishWithContext mocks base method.
-func (m *Mockwrapper) PublishWithContext(ctx context.Context, messageBody []byte) error {
+func (m *Mockwrapper) PublishWithContext(ctx context.Context, messageBody []byte, shardNo int) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PublishWithContext", ctx, messageBody)
+	ret := m.ctrl.Call(m, "PublishWithContext", ctx, messageBody, shardNo)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // PublishWithContext indicates an expected call of PublishWithContext.
-func (mr *MockwrapperMockRecorder) PublishWithContext(ctx, messageBody interface{}) *gomock.Call {
+func (mr *MockwrapperMockRecorder) PublishWithContext(ctx, messageBody, shardNo interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PublishWithContext", reflect.TypeOf((*Mockwrapper)(nil).PublishWithContext), ctx, messageBody)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PublishWithContext", reflect.TypeOf((*Mockwrapper)(nil).PublishWithContext), ctx, messageBody, shardNo)
 }

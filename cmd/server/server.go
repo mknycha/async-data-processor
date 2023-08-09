@@ -16,17 +16,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const timeout = time.Second * 5
+const (
+	timeout = time.Second * 5
+)
 
 //go:generate mockgen -destination mocks/generated.go --package mocks --source server.go
 type wrapper interface {
-	PublishWithContext(ctx context.Context, messageBody []byte) error
+	PublishWithContext(ctx context.Context, messageBody []byte, shardNo int) error
 }
 
 type Config struct {
 	TrustedProxies []string `envconfig:"TRUSTED_PROXIES"`
 	Port           string   `envconfig:"PORT" default:"8080"`
 	RabbitmqUrl    string   `envconfig:"RABBITMQ_URL" default:"amqp://guest:guest@localhost:5672/"`
+	ShardsCount    int      `envconfig:"SHARDS_COUNT" default:"5"`
 }
 
 func ServerCommand() *cobra.Command {
@@ -49,6 +52,12 @@ func ServerCommand() *cobra.Command {
 			wrapper, err := pubsub.NewWrapper(conn)
 			if err != nil {
 				log.Fatalf("failed to initialize wrapper: %s", err.Error())
+			}
+			for i := 0; i < cfg.ShardsCount; i++ {
+				err = wrapper.QueueDeclare(i)
+				if err != nil {
+					log.Fatalf("failed to declare a queue: %s", err.Error())
+				}
 			}
 
 			router, err := setupRouter(cfg, wrapper)
@@ -85,7 +94,7 @@ func setupRouter(cfg Config, wrapper wrapper) (*gin.Engine, error) {
 
 		for _, ent := range req {
 			// TODO: Can it happen in parallel?
-			err = sendEntryForProcessing(wrapper, ent)
+			err = sendEntryForProcessing(wrapper, ent, cfg.ShardsCount)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
@@ -99,17 +108,22 @@ func setupRouter(cfg Config, wrapper wrapper) (*gin.Engine, error) {
 	return r, nil
 }
 
-func sendEntryForProcessing(wrapper wrapper, ent Entry) error {
+func sendEntryForProcessing(wrapper wrapper, ent Entry, shardsCount int) error {
 	jsonContent, err := json.Marshal(ent)
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal json")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	err = wrapper.PublishWithContext(ctx, jsonContent)
+	shardNo := shardRouting(ent, shardsCount)
+	err = wrapper.PublishWithContext(ctx, jsonContent, shardNo)
 	if err != nil {
 		return errors.Wrap(err, "failed to publish message")
 	}
-	log.Printf("Published message: %s\n", string(jsonContent))
+	log.Printf("Published message: %s to shard #%d\n", string(jsonContent), shardNo)
 	return nil
+}
+
+func shardRouting(ent Entry, shardCount int) int {
+	return int(ent.Timestamp.Unix()) % shardCount
 }

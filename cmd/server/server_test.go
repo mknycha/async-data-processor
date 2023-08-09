@@ -25,8 +25,8 @@ func TestMessageRoute(t *testing.T) {
 		{
 			name: "valid request",
 			mockWrapperExpectations: func(m *mocks.MockwrapperMockRecorder) {
-				m.PublishWithContext(gomock.Any(), []byte(`{"timestamp":"2019-10-12T07:20:50.52Z","value":"B"}`))
-				m.PublishWithContext(gomock.Any(), []byte(`{"timestamp":"2019-10-12T08:10:50.52Z","value":"C"}`))
+				m.PublishWithContext(gomock.Any(), []byte(`{"timestamp":"2019-10-12T07:20:50.52Z","value":"B"}`), 0)
+				m.PublishWithContext(gomock.Any(), []byte(`{"timestamp":"2019-10-12T08:10:51.52Z","value":"C"}`), 1)
 			},
 			reqBody: `[
 				{
@@ -34,13 +34,13 @@ func TestMessageRoute(t *testing.T) {
 					"value":"B"
 				},
 				{
-					"timestamp":"2019-10-12T08:10:50.52Z",
+					"timestamp":"2019-10-12T08:10:51.52Z",
 					"value":"C"
 				}
 			]`,
 			check: func(t *testing.T, outputStatusCode int, outputBody string) {
 				assert.Equal(t, http.StatusCreated, outputStatusCode)
-				assert.Equal(t, `[{"timestamp":"2019-10-12T07:20:50.52Z","value":"B"},{"timestamp":"2019-10-12T08:10:50.52Z","value":"C"}]`, outputBody)
+				assert.Equal(t, `[{"timestamp":"2019-10-12T07:20:50.52Z","value":"B"},{"timestamp":"2019-10-12T08:10:51.52Z","value":"C"}]`, outputBody)
 			},
 		},
 		{
@@ -59,7 +59,7 @@ func TestMessageRoute(t *testing.T) {
 		{
 			name: "publishing message error",
 			mockWrapperExpectations: func(m *mocks.MockwrapperMockRecorder) {
-				m.PublishWithContext(gomock.Any(), []byte(`{"timestamp":"2019-10-12T07:20:50.52Z","value":"B"}`)).Return(errors.New("What a Terrible Failure!"))
+				m.PublishWithContext(gomock.Any(), []byte(`{"timestamp":"2019-10-12T07:20:50.52Z","value":"B"}`), 0).Return(errors.New("What a Terrible Failure!"))
 			},
 			reqBody: `[
 				{
@@ -67,7 +67,7 @@ func TestMessageRoute(t *testing.T) {
 					"value":"B"
 				},
 				{
-					"timestamp":"2019-10-12T08:10:50.52Z",
+					"timestamp":"2019-10-12T08:10:51.52Z",
 					"value":"C"
 				}
 			]`,
@@ -78,7 +78,9 @@ func TestMessageRoute(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := Config{}
+			cfg := Config{
+				ShardsCount: 5,
+			}
 			ctrl := gomock.NewController(t)
 			mockWrapper := mocks.NewMockwrapper(ctrl)
 			if tc.mockWrapperExpectations != nil {

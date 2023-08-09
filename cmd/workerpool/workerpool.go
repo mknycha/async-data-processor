@@ -1,9 +1,12 @@
 package workerpool
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 
 	"github.com/kelseyhightower/envconfig"
 	"github.com/mknycha/async-data-processor/pubsub"
@@ -13,6 +16,7 @@ import (
 
 type Config struct {
 	RabbitmqUrl string `envconfig:"RABBITMQ_URL" default:"amqp://guest:guest@localhost:5672/"`
+	ShardsCount int    `envconfig:"SHARDS_COUNT" default:"5"`
 }
 
 func WorkerPoolCommand() *cobra.Command {
@@ -35,24 +39,45 @@ func WorkerPoolCommand() *cobra.Command {
 			if err != nil {
 				log.Fatalf("failed to initialize wrapper: %s", err.Error())
 			}
-			log.Printf("Waiting for messages. To exit press CTRL+C")
-			msgs, err := wrapper.MessagesChannel()
-			if err != nil {
-				log.Fatalf("failed to consume messages: %s", err.Error())
+
+			ctx, cancelFunc := context.WithCancel(context.Background())
+			var wg sync.WaitGroup
+			for i := 0; i < cfg.ShardsCount; i++ {
+				err := wrapper.QueueDeclare(i)
+				if err != nil {
+					log.Fatalf("failed to declare a queue: %s", err.Error())
+				}
+				msgs, err := wrapper.MessagesChannel(i)
+				if err != nil {
+					log.Fatalf("failed to get messages channel: %s", err.Error())
+				}
+				wg.Add(1)
+				log.Printf("spawning worker #%d\n", i)
+				go spawnWorker(ctx, msgs, &wg, i)
 			}
+
+			log.Printf("Waiting for messages. To exit press CTRL+C")
 
 			c := make(chan os.Signal, 1)
 			signal.Notify(c, os.Interrupt)
-			for {
-				select {
-				case <-c:
-					log.Println("Goodbye!")
-					return
-				case d := <-msgs:
-					log.Printf("Received a message: %s", d.Body)
-					d.Ack(false)
-				}
-			}
+			<-c
+			cancelFunc()
+			wg.Wait()
+			fmt.Println("goodbye!")
 		},
+	}
+}
+
+func spawnWorker(ctx context.Context, msgs <-chan amqp.Delivery, wg *sync.WaitGroup, shardNo int) {
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("stopping worker #%d...\n", shardNo)
+			wg.Done()
+			return
+		case msg := <-msgs:
+			log.Printf("Worker #%d received a message: %s", shardNo, string(msg.Body))
+			msg.Ack(false)
+		}
 	}
 }
