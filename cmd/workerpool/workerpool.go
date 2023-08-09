@@ -4,9 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
-	"os/signal"
 	"sync"
+	"time"
 
 	"github.com/kelseyhightower/envconfig"
 	"github.com/mknycha/async-data-processor/pubsub"
@@ -15,8 +14,10 @@ import (
 )
 
 type Config struct {
-	RabbitmqUrl string `envconfig:"RABBITMQ_URL" default:"amqp://guest:guest@localhost:5672/"`
-	ShardsCount int    `envconfig:"SHARDS_COUNT" default:"5"`
+	RabbitmqUrl            string `envconfig:"RABBITMQ_URL" default:"amqp://guest:guest@localhost:5672/"`
+	ShardsCount            int    `envconfig:"SHARDS_COUNT" default:"5"`
+	WorkersCount           int    `envconfig:"WORKERS_COUNT" default:"1"`
+	WorkersWorktimeSeconds int    `envconfig:"WORKERS_WORKTIME_SECONDS" default:"120"`
 }
 
 func WorkerPoolCommand() *cobra.Command {
@@ -40,7 +41,6 @@ func WorkerPoolCommand() *cobra.Command {
 				log.Fatalf("failed to initialize wrapper: %s", err.Error())
 			}
 
-			ctx, cancelFunc := context.WithCancel(context.Background())
 			var wg sync.WaitGroup
 			for i := 0; i < cfg.ShardsCount; i++ {
 				err := wrapper.QueueDeclare(i)
@@ -51,32 +51,38 @@ func WorkerPoolCommand() *cobra.Command {
 				if err != nil {
 					log.Fatalf("failed to get messages channel: %s", err.Error())
 				}
-				wg.Add(1)
-				log.Printf("spawning worker #%d\n", i)
-				go spawnWorker(ctx, msgs, &wg, i)
+				for j := 0; j < cfg.WorkersCount; j++ {
+					wg.Add(1)
+					workerId := fmt.Sprintf("%d-%d", i, j)
+					log.Printf("spawning worker #%s\n", workerId)
+					ctx, cancelFunc := context.WithTimeout(context.Background(), time.Duration(cfg.WorkersWorktimeSeconds)*time.Second)
+					defer cancelFunc()
+					go spawnWorker(ctx, msgs, &wg, workerId)
+				}
 			}
 
-			log.Printf("Waiting for messages. To exit press CTRL+C")
+			// log.Printf("Waiting for messages. To exit press CTRL+C")
 
-			c := make(chan os.Signal, 1)
-			signal.Notify(c, os.Interrupt)
-			<-c
-			cancelFunc()
+			// c := make(chan os.Signal, 1)
+			// signal.Notify(c, os.Interrupt)
+			// <-c
+			// cancelFunc()
 			wg.Wait()
 			fmt.Println("goodbye!")
 		},
 	}
 }
 
-func spawnWorker(ctx context.Context, msgs <-chan amqp.Delivery, wg *sync.WaitGroup, shardNo int) {
+func spawnWorker(ctx context.Context, msgs <-chan amqp.Delivery, wg *sync.WaitGroup, workerId string) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("stopping worker #%d...\n", shardNo)
+			log.Printf("stopping worker #%s...\n", workerId)
 			wg.Done()
 			return
+		// TODO: What if the msgs channel is closed?
 		case msg := <-msgs:
-			log.Printf("Worker #%d received a message: %s", shardNo, string(msg.Body))
+			log.Printf("Worker #%s received a message: %s", workerId, string(msg.Body))
 			msg.Ack(false)
 		}
 	}
