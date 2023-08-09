@@ -1,9 +1,11 @@
 package workerpool
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -20,6 +22,7 @@ type Config struct {
 	ShardsCount            int    `envconfig:"SHARDS_COUNT" default:"5"`
 	WorkersCount           int    `envconfig:"WORKERS_COUNT" default:"3"`
 	WorkersWorktimeSeconds int    `envconfig:"WORKERS_WORKTIME_SECONDS" default:"120"`
+	DataOutputDir          string `envconfig:"DATA_OUTPUT_DIR" default:"./data_dump"`
 }
 
 func WorkerPoolCommand() *cobra.Command {
@@ -60,7 +63,7 @@ func WorkerPoolCommand() *cobra.Command {
 					ctx, cancelFunc := context.WithTimeout(context.Background(), time.Duration(cfg.WorkersWorktimeSeconds)*time.Second)
 					defer cancelFunc()
 					wg.Add(1)
-					go spawnWorker(ctx, b, msgs, &wg, workerId)
+					go spawnWorker(ctx, b, msgs, &wg, cfg.DataOutputDir, workerId)
 				}
 			}
 
@@ -76,12 +79,12 @@ func WorkerPoolCommand() *cobra.Command {
 	}
 }
 
-func spawnWorker(ctx context.Context, b *messagesBatch, msgs <-chan amqp.Delivery, wg *sync.WaitGroup, workerId string) {
+func spawnWorker(ctx context.Context, b *messagesBatch, msgs <-chan amqp.Delivery, wg *sync.WaitGroup, outputDir, workerId string) {
 	for {
 		select {
 		case <-ctx.Done():
 			// flush the remaining messages before stopping
-			flush(b, workerId)
+			flush(b, outputDir, workerId)
 			log.Printf("stopping worker #%s...\n", workerId)
 			wg.Done()
 			return
@@ -90,16 +93,24 @@ func spawnWorker(ctx context.Context, b *messagesBatch, msgs <-chan amqp.Deliver
 			b.Push(msg.Body)
 			msg.Ack(false)
 			if b.Size() == batchSizeToFlush {
-				flush(b, workerId)
+				flush(b, outputDir, workerId)
 			}
 		}
 	}
 }
 
-func flush(b *messagesBatch, workerId string) {
+func flush(b *messagesBatch, outputDir, workerId string) {
 	batchedMessages := b.GetMessages()
-	b.Reset()
-	for _, msgBody := range batchedMessages {
-		log.Printf("Worker #%s received a message: %s", workerId, string(msgBody))
+	if len(batchedMessages) == 0 {
+		return
 	}
+	b.Reset()
+	content := bytes.Join(batchedMessages, []byte("\n"))
+	filename := fmt.Sprintf("%s/%s_%d.txt", outputDir, workerId, time.Now().UnixNano())
+	err := os.WriteFile(filename, content, 0644)
+	if err != nil {
+		log.Printf("failed to write file %q: %s\n", filename, err.Error())
+		return
+	}
+	log.Printf("Worker #%s processed %d messages, wrote to file: %q", workerId, len(batchedMessages), filename)
 }
